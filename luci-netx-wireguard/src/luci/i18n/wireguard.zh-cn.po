@@ -1,0 +1,35 @@
+#
+# Yangfl <mmyangfl@gmail.com>, 2018.
+#
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Last-Translator: Yangfl <mmyangfl@gmail.com>\n"
+"Language-Team:  <debian-l10n-chinese@lists.debian.org>\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"PO-Revision-Date: 2018-08-07 14:59+0800\n"
+"X-Generator: Gtranslator 2.91.7\n"
+
+msgid "mode"
+msgstr "模式"
+
+msgid "fec"
+msgstr "加速"
+
+msgid "enable"
+msgstr "开启"
+
+msgid "video"
+msgstr "视频"
+
+msgid "game"
+msgstr "游戏"
+
+msgid "web"
+msgstr "网页"
+
+
+
+
+

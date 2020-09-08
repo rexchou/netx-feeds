@@ -1,0 +1,217 @@
+#!/usr/bin/lua
+require("luci.model.uci")
+local http = require("socket.http")
+local ltn12 = require("ltn12")
+local cjson = require("cjson")
+local x = luci.model.uci.cursor()
+http.TIMEOUT = 60
+
+local basicurl = "http://esongfast.cserver.org:8082/api/v1/"
+
+function logs(log)
+    local date = os.date("%Y-%m-%d %H:%M:%S")
+    local f = io.open("/var/log/netx", "a")
+    f:write(date .. " " .. log)
+    f:close()
+end
+
+function getInterfaceMac(interface)
+    local devid = x:get("network", interface, "ifname")
+    local num = string.sub(devid, 6)
+    local mac = x:get("network", interface .. "_eth0_" .. num .. "_dev", "macaddr")
+	print("Get mac address ok")
+    return mac
+end
+
+function writeServer(config)
+    os.execute("rm -rf /tmp/server")
+    ips = {config["msg"]["eps_ip"], config["msg"]["ip"], config["msg"]["main_ip"], config["msg"]["bak_ip"]}
+    for i, ip in ipairs(ips) do
+        if ip ~= "" then
+            file = io.open("/tmp/server", "a")
+            file:write(ip .. "\n")
+            file:close()
+        end
+    end
+	print("write server is done")
+end
+
+function getUser(user, password, mac)
+    local path = basicurl .. "get?user=" .. user .. "&password=" .. password .. "&mac=" .. mac
+    print(path)
+    local response_body = {}
+
+    local res, code, response_headers, status =
+        http.request {
+        url = path,
+        sink = ltn12.sink.table(response_body)
+    }
+    print(code)
+    if code == 200 then
+        result = cjson.decode(table.concat(response_body))
+        if result["status"] == "ok" then
+            print("Get Account successfully\n")
+            return 0, result["msg"]
+        else
+			print("Get user fail")
+            stopNetx()
+            return 1, nil
+        end
+    else
+		print("Get user fail")
+        stopNetx()
+        return 1, nil
+    end
+end
+
+function switchServer(config)
+    swith = config['fixed']
+    job = os.execute("cat /etc/crontabs/root |grep switch >/dev/null")
+    if swith == '1' then
+        if job == 0 then
+            os.execute("sed -i \'/switch/\'d /etc/crontabs/root")
+        end
+    else     
+       if job ~= 0 then
+        os.execute('echo "*/2     *	*	*	* 	sh /usr/bin/switch" >>/etc/crontabs/root')
+       end
+    end
+    os.execute("/usr/bin/switch&")
+    os.execute("/etc/init.d/cron restart&")
+end
+
+function setNetxConfig(config)
+	print("Set netx config")
+    x:set("netx", "server", "status", 33006)
+    x:set("netx", "server", "user_name", config["msg"]["user_name"])
+    x:set("netx", "server", "password", config["msg"]["passwd"])
+    x:set("netx", "info", "level", config["msg"]["level"])
+    x:set("netx", "info", "enddate", config["msg"]["end_date"])
+    x:set("netx",  "server", "line",  config['server'])
+    x:commit("netx")
+end
+
+function setNetxServerConfig(config)
+	print("Set shadowsocks server")
+    --x:set("shadowsocks-libev", "sss0", "server", "47.240.11.66")
+    x:set("shadowsocks-libev",  "sss0", "server",  config['server'])
+    x:set("shadowsocks-libev", "sss0", "disabled", 0)
+    x:set("shadowsocks-libev", "sss0", "server_port", config["msg"]["port"])
+    x:set("shadowsocks-libev", "sss0", "method", config["msg"]["method"])
+    x:set("shadowsocks-libev", "sss0", "password", config["msg"]["passwd"])
+    x:commit("shadowsocks-libev")
+end
+
+function setNetxRedirConfig(config)
+    --print(config["server"])
+    x:commit("shadowsocks-libev")
+end
+
+function setNetxTunnelConfig(config)
+	print("Set shadowsocks Tunnel")
+    x:set("shadowsocks-libev", "@ss_tunnel[0]", "tunnel_address", "1.1.1.1:53")
+    x:set("shadowsocks-libev", "ss_rules", "dst_ips_forward", "1.1.1.1")
+    x:commit("shadowsocks-libev")
+end
+
+function checkMode(config)
+    local mode = config["mode"]
+    if mode == "4" then
+        print("proxy mode in china")
+        x:delete("shadowsocks-libev", "ss_rules", "dst_ips_bypass_file")
+        x:set("shadowsocks-libev", "ss_rules", "dst_ips_forward_file", "/root/ignore.list")
+        x:set("shadowsocks-libev", "ss_rules", "dst_default", "bypass")
+        x:commit("shadowsocks-libev")
+    elseif mode == "2" then
+        print("proxy mode in Smart")
+        os.execute("cat /root/accelerated-domains.china.conf >/var/dnsmasq.d/accelerated-domains.china.conf")
+        x:delete("shadowsocks-libev", "ss_rules", "dst_ips_forward_file")
+        x:set("shadowsocks-libev", "ss_rules", "dst_ips_bypass_file", "/root/ignore.list")
+        x:set("shadowsocks-libev", "ss_rules", "dst_default", "forward")
+        x:commit("shadowsocks-libev")
+    else
+        print("proxy mode in globe")
+        x:delete("shadowsocks-libev", "ss_rules", "dst_ips_bypass_file")
+        x:delete("shadowsocks-libev", "ss_rules", "dst_ips_forward_file")
+        x:set("shadowsocks-libev", "ss_rules", "dst_default", "forward")
+        x:commit("shadowsocks-libev")
+    end
+end
+
+function stopNetx()
+	print("stop shadowsocks and restart dnsmasq")
+    x:delete("dhcp", "@dnsmasq[0]", "noresolv")
+    x:delete("dhcp", "@dnsmasq[0]", "server")
+    x:set("shadowsocks-libev", "hi", "disabled", 1)
+    x:set("shadowsocks-libev", "cfg0249c0", "disabled", 1)
+    x:set("shadowsocks-libev", "ss_rules", "disabled", 1)
+    x:commit("shadowsocks-libev")
+    x:commit("dhcp")
+    os.execute("/etc/init.d/dnsmasq reload &")
+	os.execute("/etc/init.d/shadowsocks-libev stop&")
+end
+
+function startNetx()
+	print("start shadowsocks and restart dnsmasq")
+    x:set("dhcp", "@dnsmasq[0]", "server", {"127.0.0.1#1090"})
+    x:set("dhcp", "@dnsmasq[0]", "noresolv", 1)
+    x:commit("dhcp")
+
+    x:delete("shadowsocks-libev", "hi", "disabled")
+    x:delete("shadowsocks-libev", "cfg0249c0", "disabled")
+    x:delete("shadowsocks-libev", "ss_rules", "disabled")
+    x:commit("shadowsocks-libev")
+	os.execute("/etc/init.d/shadowsocks-libev start&")
+	 os.execute("/etc/init.d/dnsmasq restart &")
+
+end
+
+function main(config)
+    if config["status"] == 0 then
+        writeServer(config)
+        setNetxConfig(config)
+        setNetxServerConfig(config)
+        setNetxRedirConfig(config)
+        setNetxTunnelConfig(config)
+        checkMode(config)
+        startNetx()
+        switchServer(config)
+        return 0
+    else
+        x:set("netx", "server", "status", 0)
+        x:commit("netx")
+        logs("Get account failed\n")
+        return 1
+    end
+end
+
+local config = {}
+local mac = getInterfaceMac("wan")
+local user = x:get("netx", "server", "user_name")
+local password = x:get("netx", "server", "password")
+local fixed = x:get("netx", "server", "fixed")
+local server = x:get("netx", "server", "line")
+local mode = x:get("netx", "server", "proxy")
+local status, msg = getUser("user", "password", mac)
+os.execute("cat /dev/null >/var/log/netx")
+
+stopNetx()
+while status == 1 do
+    status, msg = getUser(user, password, mac)
+end
+
+local config = {
+    ["mac"] = mac,
+    ["user"] = user,
+    ["password"] = password,
+    ["fixed"] = fixed,
+    ["server"] = server,
+    ["mode"] = mode,
+    ["status"] = status,
+    ["msg"] = msg
+}
+
+main(config)
+
+
+
