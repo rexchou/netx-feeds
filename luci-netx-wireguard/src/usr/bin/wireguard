@@ -8,15 +8,16 @@ http.TIMEOUT = 60
 
 function getWiregurad()
     local result = nil
-	local mac = x:get("network","wan_eth0_2_dev","macaddr")
+    local mac = x:get("network","wan_eth0_2_dev","macaddr")
     local respbody = {}
 
     http.request {
-        url = "http://192.168.3.61:3000/api/user/?_where=(mac,eq,"..mac..")",
+        url = "http://149.129.32.238:8088/api/v1/getwg/?mac="..mac,
         sink = ltn12.sink.table(respbody)
     }
     if table.concat(respbody) ~= "" then
         json = cjson.decode(table.concat(respbody))
+	print(json[1])
         if json[1] ~= nil then
           result = json[1]
         end
@@ -35,7 +36,10 @@ if account ~= nil then
         x:commit("wireguard")
 	return 0
 else
+	x:set("wireguard", "wg0", "enable", 2)
+	x:commit("wireguard")
 	return 1
 	
 end
+
 
